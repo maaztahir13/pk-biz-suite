@@ -33,7 +33,7 @@ function InventoryPage() {
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState("All");
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", category: categories[0], qty: "", purchasePrice: "", price: "" });
+  const [form, setForm] = useState({ name: "", category: categories[0] ?? "Grocery", qty: "", purchasePrice: "", price: "" });
 
   const filtered = items.filter(
     (p) =>
@@ -55,7 +55,7 @@ function InventoryPage() {
       },
       ...prev,
     ]);
-    setForm({ name: "", category: categories[0], qty: "", purchasePrice: "", price: "" });
+    setForm({ name: "", category: categories[0] ?? "Grocery", qty: "", purchasePrice: "", price: "" });
     setOpen(false);
   };
 
