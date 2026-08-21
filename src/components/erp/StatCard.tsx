@@ -29,7 +29,7 @@ export function StatCard({
       </div>
       <div className="min-w-0">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-        <p className="mt-1 truncate text-xl font-semibold md:text-2xl">{value}</p>
+        <p className="mt-1 text-lg font-semibold leading-tight break-words md:text-xl">{value}</p>
         {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
       </div>
     </Card>
