@@ -9,7 +9,7 @@ export type DbProduct = {
   stock_qty: number;
   purchase_price: number;
   unit_price: number;
-  status: string;
+  status: string | null;
 };
 
 export type DbCustomer = {
@@ -28,7 +28,7 @@ export type DbInvoice = {
   customer_name: string;
   total_amount: number;
   payment_method: string;
-  status: string;
+  status: string | null;
   created_at: string;
 };
 
@@ -47,7 +47,7 @@ export type DbEmployee = {
   role: string;
   salary: number;
   attendance_percent: number;
-  status: string;
+  status: string | null;
 };
 
 function unwrap<T>(res: { data: T | null; error: { message: string } | null }): T {

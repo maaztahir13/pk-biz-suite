@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { Plus, Search } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { categories, formatPKR, products as seedProducts, stockStatus, type Product } from "@/lib/erp-data";
+import { categories, formatPKR } from "@/lib/erp-data";
+import { useProductMutations, useProducts, type DbProduct } from "@/lib/erp-queries";
 
 export const Route = createFileRoute("/inventory")({
   head: () => ({
@@ -28,12 +29,17 @@ export const Route = createFileRoute("/inventory")({
   component: InventoryPage,
 });
 
+const emptyForm = { name: "", category: categories[0] ?? "Grocery", qty: "", purchasePrice: "", price: "" };
+
 function InventoryPage() {
-  const [items, setItems] = useState<Product[]>(seedProducts);
+  const { data: items = [] } = useProducts();
+  const { create, update, remove } = useProductMutations();
+
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState("All");
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", category: categories[0] ?? "Grocery", qty: "", purchasePrice: "", price: "" });
+  const [editing, setEditing] = useState<DbProduct | null>(null);
+  const [form, setForm] = useState(emptyForm);
 
   const filtered = items.filter(
     (p) =>
@@ -43,20 +49,45 @@ function InventoryPage() {
 
   const addProduct = () => {
     if (!form.name) return;
-    setItems((prev) => [
-      {
-        id: `p${prev.length + 1}-${Date.now()}`,
-        name: form.name,
-        sku: `NEW-${String(prev.length + 1).padStart(3, "0")}`,
-        category: form.category,
-        qty: Number(form.qty) || 0,
-        purchasePrice: Number(form.purchasePrice) || 0,
-        price: Number(form.price) || 0,
-      },
-      ...prev,
-    ]);
-    setForm({ name: "", category: categories[0] ?? "Grocery", qty: "", purchasePrice: "", price: "" });
+    create.mutate({
+      name: form.name,
+      sku: `NEW-${String(items.length + 1).padStart(3, "0")}`,
+      category: form.category,
+      stock_qty: Number(form.qty) || 0,
+      purchase_price: Number(form.purchasePrice) || 0,
+      unit_price: Number(form.price) || 0,
+    });
+    setForm(emptyForm);
     setOpen(false);
+  };
+
+  const startEdit = (p: DbProduct) => {
+    setEditing(p);
+    setForm({
+      name: p.name,
+      category: p.category,
+      qty: String(p.stock_qty),
+      purchasePrice: String(p.purchase_price),
+      price: String(p.unit_price),
+    });
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    update.mutate({
+      id: editing.id,
+      name: form.name,
+      category: form.category,
+      stock_qty: Number(form.qty) || 0,
+      purchase_price: Number(form.purchasePrice) || 0,
+      unit_price: Number(form.price) || 0,
+    });
+    setEditing(null);
+    setForm(emptyForm);
+  };
+
+  const deleteProduct = (p: DbProduct) => {
+    if (window.confirm(`Delete "${p.name}"? This cannot be undone.`)) remove.mutate(p.id);
   };
 
   return (
@@ -76,7 +107,13 @@ function InventoryPage() {
             <option key={c}>{c}</option>
           ))}
         </select>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog
+          open={open}
+          onOpenChange={(o) => {
+            setOpen(o);
+            if (o) setForm(emptyForm);
+          }}
+        >
           <DialogTrigger asChild>
             <Button>
               <Plus className="size-4" /> Add Product
@@ -86,35 +123,11 @@ function InventoryPage() {
             <DialogHeader>
               <DialogTitle>Add Product</DialogTitle>
             </DialogHeader>
-            <div className="grid gap-3">
-              <Field label="Product Name">
-                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Shan Masala Box" />
-              </Field>
-              <Field label="Category">
-                <select
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  {categories.map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              </Field>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="Quantity">
-                  <Input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
-                </Field>
-                <Field label="Purchase Rs.">
-                  <Input type="number" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} />
-                </Field>
-                <Field label="Sale Rs.">
-                  <Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
-                </Field>
-              </div>
-            </div>
+            <ProductForm form={form} setForm={setForm} />
             <DialogFooter>
-              <Button onClick={addProduct}>Save Product</Button>
+              <Button onClick={addProduct} disabled={create.isPending}>
+                {create.isPending ? "Saving..." : "Save Product"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -122,7 +135,7 @@ function InventoryPage() {
 
       <Card className="overflow-hidden rounded-2xl">
         <CardContent className="overflow-x-auto p-0">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">Product Name</th>
@@ -132,31 +145,87 @@ function InventoryPage() {
                 <th className="px-4 py-3 text-right font-medium">Unit Price</th>
                 <th className="px-4 py-3 text-right font-medium">Stock Value</th>
                 <th className="px-4 py-3 text-right font-medium">Status</th>
+                <th className="px-4 py-3 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => {
-                const status = stockStatus(p.qty);
-                return (
-                  <tr key={p.id} className="border-t transition-colors hover:bg-muted/40">
-                    <td className="px-4 py-3 font-medium">{p.name}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{p.sku}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{p.category}</td>
-                    <td className="px-4 py-3 text-right">{p.qty}</td>
-                    <td className="px-4 py-3 text-right">{formatPKR(p.price)}</td>
-                    <td className="px-4 py-3 text-right font-medium">{formatPKR(p.qty * p.price)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Badge variant={status === "In Stock" ? "default" : status === "Low Stock" ? "secondary" : "destructive"}>
-                        {status}
-                      </Badge>
-                    </td>
-                  </tr>
-                );
-              })}
+              {filtered.map((p) => (
+                <tr key={p.id} className="border-t transition-colors hover:bg-muted/40">
+                  <td className="px-4 py-3 font-medium">{p.name}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{p.sku}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{p.category}</td>
+                  <td className="px-4 py-3 text-right">{p.stock_qty}</td>
+                  <td className="px-4 py-3 text-right">{formatPKR(Number(p.unit_price))}</td>
+                  <td className="px-4 py-3 text-right font-medium">{formatPKR(p.stock_qty * Number(p.unit_price))}</td>
+                  <td className="px-4 py-3 text-right">
+                    <Badge variant={p.status === "In Stock" ? "default" : p.status === "Low Stock" ? "secondary" : "destructive"}>
+                      {p.status}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button size="icon" variant="outline" className="size-8" onClick={() => startEdit(p)}>
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="size-8 text-destructive" onClick={() => deleteProduct(p)}>
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </CardContent>
       </Card>
+
+      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Product</DialogTitle>
+          </DialogHeader>
+          <ProductForm form={form} setForm={setForm} />
+          <DialogFooter>
+            <Button onClick={saveEdit} disabled={update.isPending}>
+              {update.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+type FormState = typeof emptyForm;
+
+function ProductForm({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+  return (
+    <div className="grid gap-3">
+      <Field label="Product Name">
+        <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Shan Masala Box" />
+      </Field>
+      <Field label="Category">
+        <select
+          value={form.category}
+          onChange={(e) => setForm({ ...form, category: e.target.value })}
+          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+        >
+          {categories.map((c) => (
+            <option key={c}>{c}</option>
+          ))}
+        </select>
+      </Field>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Quantity">
+          <Input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+        </Field>
+        <Field label="Purchase Rs.">
+          <Input type="number" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} />
+        </Field>
+        <Field label="Sale Rs.">
+          <Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+        </Field>
+      </div>
     </div>
   );
 }
