@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { BUSINESS_NAME, formatPKR, products, customers } from "@/lib/erp-data";
+import { BUSINESS_NAME, formatPKR } from "@/lib/erp-data";
+import { useCheckout, useCustomers, useProducts } from "@/lib/erp-queries";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/pos")({
@@ -23,21 +24,34 @@ export const Route = createFileRoute("/pos")({
 });
 
 const paymentMethods = ["Cash", "Bank Transfer", "EasyPaisa", "JazzCash"] as const;
+const saleStatuses = ["Paid", "Udhaar", "Partial"] as const;
 
 type CartLine = { id: string; name: string; price: number; qty: number };
 
 function PosPage() {
+  const { data: products = [] } = useProducts();
+  const { data: customers = [] } = useCustomers();
+  const checkout = useCheckout();
+
   const [query, setQuery] = useState("");
-  const [cart, setCart] = useState<CartLine[]>([
-    { id: "p1", name: "Basmati Rice 5kg (Guard)", price: 2450, qty: 2 },
-    { id: "p5", name: "Coca Cola 1.5L", price: 180, qty: 6 },
-    { id: "p10", name: "Surf Excel 1kg", price: 610, qty: 1 },
-  ]);
-  const [discount, setDiscount] = useState(200);
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [discount, setDiscount] = useState(0);
   const [taxRate, setTaxRate] = useState(5);
   const [customer, setCustomer] = useState("Walk-in Customer");
   const [payment, setPayment] = useState<(typeof paymentMethods)[number]>("Cash");
+  const [status, setStatus] = useState<(typeof saleStatuses)[number]>("Paid");
   const [showInvoice, setShowInvoice] = useState(false);
+  const [savedInvoice, setSavedInvoice] = useState<{
+    number: string;
+    lines: CartLine[];
+    subtotal: number;
+    tax: number;
+    total: number;
+    discount: number;
+    taxRate: number;
+    customer: string;
+    payment: string;
+  } | null>(null);
 
   const filtered = products.filter(
     (p) =>
@@ -53,17 +67,45 @@ function PosPage() {
   }, [cart, discount, taxRate]);
 
   const addItem = (id: string) => {
-    const p = products.find((x) => x.id === id)!;
+    const p = products.find((x) => x.id === id);
+    if (!p) return;
     setCart((c) =>
       c.some((l) => l.id === id)
         ? c.map((l) => (l.id === id ? { ...l, qty: l.qty + 1 } : l))
-        : [...c, { id: p.id, name: p.name, price: p.price, qty: 1 }],
+        : [...c, { id: p.id, name: p.name, price: Number(p.unit_price), qty: 1 }],
     );
   };
   const changeQty = (id: string, delta: number) =>
     setCart((c) =>
       c.map((l) => (l.id === id ? { ...l, qty: Math.max(1, l.qty + delta) } : l)),
     );
+
+  const generateInvoice = async () => {
+    if (cart.length === 0) return;
+    const match = customers.find((c) => c.name === customer);
+    const result = await checkout.mutateAsync({
+      lines: cart,
+      total: totals.total,
+      paymentMethod: payment,
+      status,
+      customerId: match?.id ?? null,
+      customerName: customer,
+    });
+    setSavedInvoice({
+      number: result.invoiceNumber,
+      lines: cart,
+      subtotal: totals.subtotal,
+      tax: totals.tax,
+      total: totals.total,
+      discount,
+      taxRate,
+      customer,
+      payment,
+    });
+    setShowInvoice(true);
+    setCart([]);
+    setDiscount(0);
+  };
 
   return (
     <div className="grid gap-4 lg:grid-cols-5">
@@ -85,15 +127,15 @@ function PosPage() {
             <button
               key={p.id}
               onClick={() => addItem(p.id)}
-              disabled={p.qty === 0}
+              disabled={p.stock_qty === 0}
               className="rounded-xl border bg-card p-3 text-left transition-all hover:border-primary/50 hover:shadow-md disabled:opacity-50"
             >
               <p className="line-clamp-2 text-sm font-medium">{p.name}</p>
               <p className="mt-1 text-xs text-muted-foreground">{p.sku} · {p.category}</p>
               <div className="mt-2 flex items-center justify-between">
-                <span className="font-semibold text-primary">{formatPKR(p.price)}</span>
-                <Badge variant={p.qty === 0 ? "destructive" : p.qty <= 10 ? "secondary" : "outline"}>
-                  {p.qty} in stock
+                <span className="font-semibold text-primary">{formatPKR(Number(p.unit_price))}</span>
+                <Badge variant={p.stock_qty === 0 ? "destructive" : p.stock_qty <= 10 ? "secondary" : "outline"}>
+                  {p.stock_qty} in stock
                 </Badge>
               </div>
             </button>
@@ -178,6 +220,19 @@ function PosPage() {
             </div>
           </div>
 
+          <div className="space-y-1.5">
+            <Label>Payment Status</Label>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as (typeof saleStatuses)[number])}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              {saleStatuses.map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="space-y-1.5 rounded-xl bg-muted/60 p-3 text-sm">
             <Row label="Subtotal" value={formatPKR(totals.subtotal)} />
             <Row label="Discount" value={`- ${formatPKR(discount)}`} />
@@ -188,8 +243,8 @@ function PosPage() {
             </div>
           </div>
 
-          <Button className="w-full" onClick={() => setShowInvoice(true)} disabled={cart.length === 0}>
-            Generate Invoice
+          <Button className="w-full" onClick={generateInvoice} disabled={cart.length === 0 || checkout.isPending}>
+            {checkout.isPending ? "Saving..." : "Generate Invoice"}
           </Button>
         </CardContent>
       </Card>
@@ -199,62 +254,64 @@ function PosPage() {
           <DialogHeader>
             <DialogTitle>Invoice Preview</DialogTitle>
           </DialogHeader>
-          <div className="space-y-5 rounded-xl border p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                  <Store className="size-6" />
+          {savedInvoice && (
+            <div className="space-y-5 rounded-xl border p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                    <Store className="size-6" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">{BUSINESS_NAME}</p>
+                    <p className="text-xs text-muted-foreground">Main Bazaar, Lahore · 0300-1234567</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-semibold">{BUSINESS_NAME}</p>
-                  <p className="text-xs text-muted-foreground">Main Bazaar, Lahore · 0300-1234567</p>
+                <div className="text-right text-sm">
+                  <p className="font-semibold">{savedInvoice.number}</p>
+                  <p className="text-xs text-muted-foreground">{new Date().toLocaleDateString("en-GB")}</p>
                 </div>
               </div>
-              <div className="text-right text-sm">
-                <p className="font-semibold">INV-2026-020</p>
-                <p className="text-xs text-muted-foreground">{new Date().toLocaleDateString("en-GB")}</p>
+
+              <div className="text-sm">
+                <p className="text-muted-foreground">Billed To</p>
+                <p className="font-medium">{savedInvoice.customer}</p>
               </div>
-            </div>
 
-            <div className="text-sm">
-              <p className="text-muted-foreground">Billed To</p>
-              <p className="font-medium">{customer}</p>
-            </div>
-
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs uppercase text-muted-foreground">
-                  <th className="pb-2">Item</th>
-                  <th className="pb-2 text-center">Qty</th>
-                  <th className="pb-2 text-right">Rate</th>
-                  <th className="pb-2 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cart.map((l) => (
-                  <tr key={l.id} className="border-b last:border-0">
-                    <td className="py-2">{l.name}</td>
-                    <td className="py-2 text-center">{l.qty}</td>
-                    <td className="py-2 text-right">{formatPKR(l.price)}</td>
-                    <td className="py-2 text-right">{formatPKR(l.price * l.qty)}</td>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase text-muted-foreground">
+                    <th className="pb-2">Item</th>
+                    <th className="pb-2 text-center">Qty</th>
+                    <th className="pb-2 text-right">Rate</th>
+                    <th className="pb-2 text-right">Amount</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {savedInvoice.lines.map((l) => (
+                    <tr key={l.id} className="border-b last:border-0">
+                      <td className="py-2">{l.name}</td>
+                      <td className="py-2 text-center">{l.qty}</td>
+                      <td className="py-2 text-right">{formatPKR(l.price)}</td>
+                      <td className="py-2 text-right">{formatPKR(l.price * l.qty)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
-            <div className="ml-auto max-w-xs space-y-1 text-sm">
-              <Row label="Subtotal" value={formatPKR(totals.subtotal)} />
-              <Row label="Discount" value={`- ${formatPKR(discount)}`} />
-              <Row label={`Sales Tax (${taxRate}%)`} value={formatPKR(totals.tax)} />
-              <div className="flex justify-between border-t pt-2 font-semibold">
-                <span>Total</span>
-                <span>{formatPKR(totals.total)}</span>
+              <div className="ml-auto max-w-xs space-y-1 text-sm">
+                <Row label="Subtotal" value={formatPKR(savedInvoice.subtotal)} />
+                <Row label="Discount" value={`- ${formatPKR(savedInvoice.discount)}`} />
+                <Row label={`Sales Tax (${savedInvoice.taxRate}%)`} value={formatPKR(savedInvoice.tax)} />
+                <div className="flex justify-between border-t pt-2 font-semibold">
+                  <span>Total</span>
+                  <span>{formatPKR(savedInvoice.total)}</span>
+                </div>
+                <p className="pt-1 text-xs text-muted-foreground">Paid via {savedInvoice.payment}</p>
               </div>
-              <p className="pt-1 text-xs text-muted-foreground">Paid via {payment}</p>
-            </div>
 
-            <p className="text-center text-xs text-muted-foreground">Shukriya! Aap ka karobar hamare liye ahem hai.</p>
-          </div>
+              <p className="text-center text-xs text-muted-foreground">Shukriya! Aap ka karobar hamare liye ahem hai.</p>
+            </div>
+          )}
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="size-4" /> Print Invoice
           </Button>
