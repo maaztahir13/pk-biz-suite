@@ -12,14 +12,8 @@ import { AlertTriangle, Banknote, HandCoins, Package, Receipt, TrendingUp } from
 import { StatCard } from "@/components/erp/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  dashboardStats,
-  formatPKR,
-  products,
-  recentTransactions,
-  salesLast7Days,
-  stockStatus,
-} from "@/lib/erp-data";
+import { formatPKR, stockStatus } from "@/lib/erp-data";
+import { useCustomers, useInvoices, useLedgerEntries, useProducts } from "@/lib/erp-queries";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -40,16 +34,49 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 });
 
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 function Dashboard() {
-  const lowStock = products.filter((p) => p.qty <= 10);
+  const { data: products = [] } = useProducts();
+  const { data: customers = [] } = useCustomers();
+  const { data: invoices = [] } = useInvoices();
+  const { data: ledger = [] } = useLedgerEntries();
+
+  const lowStock = products.filter((p) => p.stock_qty <= 10);
+  const stockValue = products.reduce((s, p) => s + p.stock_qty * Number(p.purchase_price), 0);
+  const receivables = customers.reduce((s, c) => s + Number(c.outstanding_balance), 0);
+  const udhaarCustomers = customers.filter((c) => Number(c.outstanding_balance) > 0).length;
+
+  const today = new Date().toDateString();
+  const todaysSales = invoices
+    .filter((i) => new Date(i.created_at).toDateString() === today)
+    .reduce((s, i) => s + Number(i.total_amount), 0);
+
+  const payables = ledger
+    .filter((e) => e.type === "Expense" && e.category === "Purchases")
+    .reduce((s, e) => s + Number(e.amount), 0);
+
+  const salesLast7Days = Array.from({ length: 7 }, (_, idx) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - idx));
+    const key = d.toDateString();
+    return {
+      day: DAY_LABELS[d.getDay()] ?? "",
+      sales: invoices
+        .filter((i) => new Date(i.created_at).toDateString() === key)
+        .reduce((s, i) => s + Number(i.total_amount), 0),
+    };
+  });
+
+  const recentTransactions = invoices.slice(0, 6);
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Today's Sales" value={formatPKR(dashboardStats.todaysSales)} icon={TrendingUp} tone="success" hint="+12% vs yesterday" />
-        <StatCard label="Receivables (Wasooli)" value={formatPKR(dashboardStats.receivables)} icon={HandCoins} tone="warning" hint="From 6 customers" />
-        <StatCard label="Total Payables" value={formatPKR(dashboardStats.payables)} icon={Banknote} tone="destructive" hint="4 suppliers pending" />
-        <StatCard label="Stock Value" value={formatPKR(dashboardStats.stockValue)} icon={Package} hint={`${products.length} products`} />
+        <StatCard label="Today's Sales" value={formatPKR(todaysSales)} icon={TrendingUp} tone="success" hint="Live from invoices" />
+        <StatCard label="Receivables (Wasooli)" value={formatPKR(receivables)} icon={HandCoins} tone="warning" hint={`From ${udhaarCustomers} customers`} />
+        <StatCard label="Total Payables" value={formatPKR(payables)} icon={Banknote} tone="destructive" hint="Stock purchases" />
+        <StatCard label="Stock Value" value={formatPKR(stockValue)} icon={Package} hint={`${products.length} products`} />
         <StatCard label="Low Stock Alerts" value={`${lowStock.length} items`} icon={AlertTriangle} tone="warning" hint="Reorder soon" />
       </div>
 
@@ -100,8 +127,8 @@ function Dashboard() {
                   <p className="truncate text-sm font-medium">{item.name}</p>
                   <p className="text-xs text-muted-foreground">{item.sku}</p>
                 </div>
-                <Badge variant={item.qty === 0 ? "destructive" : "secondary"} className="shrink-0">
-                  {item.qty} left
+                <Badge variant={item.stock_qty === 0 ? "destructive" : "secondary"} className="shrink-0">
+                  {item.stock_qty} left
                 </Badge>
               </div>
             ))}
@@ -126,10 +153,10 @@ function Dashboard() {
             </thead>
             <tbody>
               {recentTransactions.map((t) => (
-                <tr key={t.invoice} className="border-b last:border-0">
-                  <td className="py-3 font-medium">{t.invoice}</td>
-                  <td className="py-3 text-muted-foreground">{t.customer}</td>
-                  <td className="py-3 text-right font-medium">{formatPKR(t.amount)}</td>
+                <tr key={t.id} className="border-b last:border-0">
+                  <td className="py-3 font-medium">{t.invoice_number}</td>
+                  <td className="py-3 text-muted-foreground">{t.customer_name}</td>
+                  <td className="py-3 text-right font-medium">{formatPKR(Number(t.total_amount))}</td>
                   <td className="py-3 text-right">
                     <Badge
                       variant={t.status === "Paid" ? "default" : t.status === "Udhaar" ? "destructive" : "secondary"}
